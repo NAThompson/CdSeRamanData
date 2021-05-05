@@ -5,22 +5,61 @@ using Plots
 using PlotThemes
 using HDF5
 using Wavelets
+using LsqFit
+using BenchmarkTools
 theme(:solarized)
 PLOTS_DEFAULTS = Dict(:dpi => 600)
 Plots.GRBackend()
 
+@. bell_curve(λ, p) = p[1] + p[2]*exp(-((λ-p[3])/p[4])^2)
 
-function main()
-    # An example file:
-    # Assume that comments refer to this file.
-    # This filename contains quite a bit of metadata.
-    # For example, this was taken off oa CdSe/CdTe heterostructure.
-    # Probably shot with a 10kV laser at 180 pico amps.
-    # 1s - is it an integration type?
-    filestring = "../data/CdSe-CdTe_10kV-180pA-hyper-1s-1B-1G-150nm-150g-200um-VISNIR-80K.h5"
-    for arg in ARGS
-        filestring = arg
+# L(λ) = k1 + A(Γ/2)²/((λ-λ₀)² + (Γ/2)²)
+@. lorentzian(λ, p) = p[1] + p[2]*(p[4]/2)^2/((λ-p[3])^2 + (p[4]/2)^2)
+
+# This model must have the following meaning:
+# First parameter: Vertical shift
+# Second parameter: Amplitude
+# Third parameter: Horizontal shift
+# Fourth parameter: Linewidth
+# If it doesn't, the initial guesses will be completely wrong.
+# Of course, it might converge anyway though!
+# If least-squares fitting was really robust against initial guess,
+# we wouldn't need to fit to the denoised data.
+# But we need the initial guesses from the denoised data.
+function fit_denoised_to_model(wavelengths, denoised, model)
+    max_idx = argmax(denoised)
+    max_reflectance = denoised[max_idx]
+    
+    max_wavelength = wavelengths[max_idx]
+    max_reflectance = denoised[max_idx]
+    idx = 0
+    while denoised[max_idx + idx] > max_reflectance/2
+        idx += 1
     end
+    linewidth_guess = max_wavelength - wavelengths[idx]
+
+    p0 = [0.0, max_reflectance, max_wavelength, linewidth_guess]
+
+    idx1 = max(1, max_idx - idx)
+    idx2 = min(max_idx + idx, length(wavelengths))
+    fit = curve_fit(model, view(wavelengths, idx1:idx2), view(denoised, idx1:idx2), p0; autodiff=:forwarddiff)
+
+    return fit
+end
+
+function fit_denoised_brick_to_model(wavelengths, denoisedBrick, model)
+    dims = size(denoisedBrick)
+    fitParamsBrick = Array{Float64,3}(undef, dims[1], dims[2], 4)
+    for j in dims[2]
+        for i in dims[1]
+            fit = fit_denoised_to_model(wavelengths, denoisedBrick[i,j,:], model)
+            fitParamsBrick[i,j,:] = fit.param
+        end
+    end
+    fitParamsBrick
+end
+
+function load_dataset(filestring)
     if !HDF5.ishdf5(filestring)
         println("$filestring is not an HDF5 file.")
         exit(1)
@@ -42,81 +81,74 @@ function main()
     # https://stackoverflow.com/questions/52505760/dropping-singleton-dimensions-in-julia/52507859
     # Julia reads this as a 40x79x1024 image brick of UInt64's.
     # Python reads it as a 1024x79x40 brick.
-    # NB: I'm still trying to figure out the layout!
-    # Note that Julia is Fortran order, Python is C order.
-
-    # Anyways, on to the background subtraction.
-    # In Brian's original Python code, he finds 3160 = 79x40 minima,
-    # which he then subtracts from each image.
-
-    dims = size(dataset)
-    # For the example file: dims = (40, 79, 1024)
-    # Don't forget that Julia is 1-indexed!
-    minima = Vector{UInt16}(undef, dims[1]*dims[2])
-
-    for k in 1:dims[3]
-        minimum = typemax(UInt16);
-        for j in 1:dims[2]
-            for i in 1:dims[1]
-                if dataset[i,j,k] < minimum
-                    minimum = dataset[i,j,k]
-                end
-            end
-        end
-        # Now we have the minimum; subtract it off:
-        for j in 1:dims[2]
-            for i in 1:dims[1]
-                @assert dataset[i,j,k] >= minimum
-                dataset[i,j,k] -= minimum
-            end
-        end
-    end
 
     # I suspect this data is in meters; you want it in nanometers?
     # Note that these wavelengths *look* equally spaced at a glance-but they are not *quite* equispaced.
-    wavelengths = read(h5["Acquisition2/ImageData/DimensionScaleC"])*1e9
-
-    # The Wavelets Package operates on floating point data:
-    i = 4
-    j = 3
-    x = convert(Array{Float32}, dataset[i,j,:])
-
-    # Translation invariance puts a little ring right on the peak (for the examples I tried!)
-    # Hence the TI=false. I also tried the 6 and 10 vanishing moment symlet, which were both inferior
-    # to the 8 vanishing moment symlet.
-    # This is consistent with what has been repeatedly observed in the literature,
-    # See S. Mallat, A Wavelet Tour of Signal Processing.
-    #y = denoise(x, wavelet(WT.sym8, WT.Filter), TI=false)
-    #plt = plot(wavelengths, [x, y], label=["Raw data" "Denoised with 8 Vanishing Moment Symlet"], xlabel="λ (nm)", size=(1200,800))
-    #max_idx = argmax(y)
-    #plot!([wavelengths[max_idx]], seriestype="vline", label="argmax(denoised)")
-    #savefig("denoised_qc_$i-$j.png")
-
-    # The first denoise was a quality check.
-    # Now let's spool up the turbo and denoise them all:
-    denoisedData = Array{Float32, 3}(undef, (dims[1],dims[2],dims[3]))
-    maxima = Array{Float32,2}(undef, (dims[1],dims[2]))
-    for j in 1:dims[2]
-        for i in 1:dims[1]
-            x = convert(Array{Float32}, dataset[i,j,:])
-            denoisedData[i,j,:] = denoise(x, wavelet(WT.sym8, WT.Filter), TI=false)
-            plt = plot(wavelengths, [x, denoisedData[i,j,:]], label=["Raw data" "Denoised with 8 Vanishing Moment Symlet"], xlabel="λ (nm)", size=(1200,800))
-            max_idx = argmax(denoisedData[i,j,:])
-            plot!([wavelengths[max_idx]], seriestype="vline", label="argmax(denoised)")
-            display(plt)
-            sleep(1.5)
-            maximum = 0
-            for k in 1:dims[3]
-                if denoisedData[i,j,k] > maximum
-                    maximum = denoisedData[i,j,k]
-                end
-            end
-            maxima[i,j] = maximum
-        end
-    end
-
-
+    wavelengths = convert(Array{Float64}, read(h5["Acquisition2/ImageData/DimensionScaleC"])*1e9)
     close(h5)
+    # The data is stored in UInt16 format.
+    # Obviously it's be preferable to keep it that way, but the denoiser and the fitting routine
+    # expects floating point data.
+    # We could also get away with Float32 here, but let's wait until there's a performance problem
+    # as it could cause numerical problems using less precision.
+    floatDataset = convert(Array{Float64,3}, dataset)
+    return wavelengths, floatDataset
 end
 
-main()
+function denoise_brick(rawData)
+    dims = size(rawData)
+    denoisedData = Array{Float64, 3}(undef, (dims[1],dims[2],dims[3]))
+    for j in 1:dims[2]
+        for i in 1:dims[1]
+            # Translation invariance puts a little ring right on the peak (for the examples I tried!)
+            # Hence the TI=false. I also tried the 6 and 10 vanishing moment symlet, which were both inferior
+            # to the 8 vanishing moment symlet.
+            # This is consistent with what has been repeatedly observed in the literature,
+            # See S. Mallat, A Wavelet Tour of Signal Processing.
+            denoisedData[i,j,:] = denoise(rawData[i,j,:], wavelet(WT.sym8, WT.Filter), TI=false)
+            m = minimum(denoisedData[i,j,:])
+            # We're subtracting off the minimum here because it will make our plots less janky over steps.
+            # Brian Lerner also commented in the original python program that it was a poor man's background subtraction.
+            rawData[i,j,:] .-= m
+            denoisedData[i,j,:] .-= m
+        end
+    end
+    denoisedData
+end
+
+
+function main()
+    # An example file:
+    # Assume that comments refer to this file.
+    # This filename contains quite a bit of metadata.
+    # For example, this was taken off oa CdSe/CdTe heterostructure.
+    # Probably shot with a 10kV laser at 180 pico amps.
+    # 1s - is it an integration type?
+    filestring = "../data/CdSe-CdTe_10kV-180pA-hyper-1s-1B-1G-150nm-150g-200um-VISNIR-80K.h5"
+    for arg in ARGS
+        filestring = arg
+    end
+
+    wavelengths, rawDataset = load_dataset(filestring)
+    denoisedDataset = denoise_brick(rawDataset)
+
+    fit = fit_denoised_to_model(wavelengths, denoisedDataset[1,1,:], bell_curve)
+    if !fit.converged
+        println("The fit did not converge.")
+        exit(1)
+    end
+    # Use: fieldnames(typeof(fit)) to explore this fit.
+    # This gives, for me, fit.param, fit.resid, fit.jacobian, fit.converged, fit.wt
+    fit_data = bell_curve(wavelengths, fit.param)
+
+    plt = plot(wavelengths, [rawDataset[1,1,:], denoisedDataset[1,1,:], fit_data], label=["Raw data" "Denoised with 8 Vanishing Moment Symlet" "Lorentzian Fit"], xlabel="λ (nm)", size=(1200,800))
+    max_idx = argmax(denoisedDataset[1,1,:])
+    plot!([wavelengths[max_idx]], seriestype="vline", label="argmax(denoised)")
+    plot!(ylims = (0, maximum(rawDataset[1,1,:])))
+    savefig("denoised_qc.png")
+
+end
+
+if abspath(PROGRAM_FILE) == @__FILE__
+    main()
+end
