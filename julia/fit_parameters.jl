@@ -16,6 +16,12 @@ Plots.GRBackend()
 # L(λ) = k1 + A(Γ/2)²/((λ-λ₀)² + (Γ/2)²)
 @. lorentzian(λ, p) = p[1] + p[2]*(p[4]/2)^2/((λ-p[3])^2 + (p[4]/2)^2)
 
+# f(λ) = k1 + A((Γ/2)²(1-q²) - qΓ(λ-λ₀))/((λ-λ₀)² + (Γ/2)²)
+# The q parameter is p[5];
+# I suspect there's varying conventions for q; I'm getting q ≈ -1;
+# ostensibly there is more elegance to the expression under the mapping q ↦ 1-q.
+@. fano(λ, p) = p[1] + p[2]*( (p[4]/2)^2*(1-p[5]^2)  - p[5]*(λ-p[3]) )/((λ-p[3])^2 + (p[4]/2)^2)
+
 # This model must have the following meaning:
 # First parameter: Vertical shift
 # Second parameter: Amplitude
@@ -38,7 +44,7 @@ function fit_denoised_to_model(wavelengths, denoised, model)
     end
     linewidth_guess = max_wavelength - wavelengths[idx]
 
-    p0 = [0.0, max_reflectance, max_wavelength, linewidth_guess]
+    p0 = [0.0, max_reflectance, max_wavelength, linewidth_guess, -1.0]
 
     idx1 = max(1, max_idx - idx)
     idx2 = min(max_idx + idx, length(wavelengths))
@@ -49,10 +55,18 @@ end
 
 function fit_denoised_brick_to_model(wavelengths, denoisedBrick, model)
     dims = size(denoisedBrick)
-    fitParamsBrick = Array{Float64,3}(undef, dims[1], dims[2], 4)
-    for j in dims[2]
+    fitParamsBrick = Array{Float64,3}(undef, dims[1], dims[2], 5)
+    Threads.@threads for j in dims[2]
         for i in dims[1]
             fit = fit_denoised_to_model(wavelengths, denoisedBrick[i,j,:], model)
+            if !fit.converged
+                println("The Fano fit did not converge for trace $i, $j; fitting to Lorentzian")
+                fit = fit_denoised_to_model(wavelengths, denoisedBrick[i,j,:], lorentzian)
+                if !fit.converged
+                    println("The Lorentzian didn't converge either!")
+                end
+                println(fit)
+            end
             fitParamsBrick[i,j,:] = fit.param
         end
     end
@@ -98,7 +112,7 @@ end
 function denoise_brick(rawData)
     dims = size(rawData)
     denoisedData = Array{Float64, 3}(undef, (dims[1],dims[2],dims[3]))
-    for j in 1:dims[2]
+    Threads.@threads for j in 1:dims[2]
         for i in 1:dims[1]
             # Translation invariance puts a little ring right on the peak (for the examples I tried!)
             # Hence the TI=false. I also tried the 6 and 10 vanishing moment symlet, which were both inferior
@@ -114,6 +128,30 @@ function denoise_brick(rawData)
         end
     end
     denoisedData
+end
+
+function spot_check_workflow(i,j, wavelengths, denoisedDataset, rawDataset, model)
+    fit = fit_denoised_to_model(wavelengths, denoisedDataset[i,j,:], model)
+    if !fit.converged
+        println("The fit did not converge on trace $i,$j.")
+    end
+
+    # Use: fieldnames(typeof(fit)) to explore this fit.
+    # This gives, for me, fit.param, fit.resid, fit.jacobian, fit.converged, fit.wt
+    fit_data = model(wavelengths, fit.param)
+    q = fit.param[5]
+    plt = plot(wavelengths,
+               [rawDataset[i,j,:],
+               denoisedDataset[i,j,:],
+               fit_data],
+               label=["Raw data" "Denoised with 8 Vanishing Moment Symlet" "Fano Fit (q=$q)"],
+               xlabel="λ (nm)",
+               ylabel="Reflectance (arbitrary units)",
+               size=(1200,800))
+    max_idx = argmax(denoisedDataset[i,j,:])
+    plot!([wavelengths[max_idx]], seriestype="vline", label="argmax(denoised)")
+    plot!(ylims = (0, maximum(rawDataset[i,j,:])))
+    savefig("qc_trace_$i-$j.png")
 end
 
 
@@ -132,21 +170,13 @@ function main()
     wavelengths, rawDataset = load_dataset(filestring)
     denoisedDataset = denoise_brick(rawDataset)
 
-    fit = fit_denoised_to_model(wavelengths, denoisedDataset[1,1,:], bell_curve)
-    if !fit.converged
-        println("The fit did not converge.")
-        exit(1)
-    end
+    model = fano
+    spot_check_workflow(40,79, wavelengths,denoisedDataset, rawDataset, lorentzian)
+
+    fitBrick = fit_denoised_brick_to_model(wavelengths, denoisedDataset, model)
+
     # Use: fieldnames(typeof(fit)) to explore this fit.
     # This gives, for me, fit.param, fit.resid, fit.jacobian, fit.converged, fit.wt
-    fit_data = bell_curve(wavelengths, fit.param)
-
-    plt = plot(wavelengths, [rawDataset[1,1,:], denoisedDataset[1,1,:], fit_data], label=["Raw data" "Denoised with 8 Vanishing Moment Symlet" "Lorentzian Fit"], xlabel="λ (nm)", size=(1200,800))
-    max_idx = argmax(denoisedDataset[1,1,:])
-    plot!([wavelengths[max_idx]], seriestype="vline", label="argmax(denoised)")
-    plot!(ylims = (0, maximum(rawDataset[1,1,:])))
-    savefig("denoised_qc.png")
-
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
