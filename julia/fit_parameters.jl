@@ -13,14 +13,16 @@ Plots.GRBackend()
 
 @. bell_curve(λ, p) = p[1] + p[2]*exp(-((λ-p[3])/p[4])^2)
 
-# L(λ) = k1 + A(Γ/2)²/((λ-λ₀)² + (Γ/2)²)
+# L(λ) = k + A(Γ/2)²/((λ-λ₀)² + (Γ/2)²)
 @. lorentzian(λ, p) = p[1] + p[2]*(p[4]/2)^2/((λ-p[3])^2 + (p[4]/2)^2)
 
-# f(λ) = k1 + A((Γ/2)²(1-q²) - qΓ(λ-λ₀))/((λ-λ₀)² + (Γ/2)²)
-# The q parameter is p[5];
-# I suspect there's varying conventions for q; I'm getting q ≈ -1;
-# ostensibly there is more elegance to the expression under the mapping q ↦ 1-q.
-@. fano(λ, p) = p[1] + p[2]*(  (p[4]/2)^2*( 1 - (p[5])^2 )  - p[5]*(λ-p[3]) )/((λ-p[3])^2 + (p[4]/2)^2)
+# f(λ) = k + A((Γ/2)²(1-q²) - qΓ(λ-λ₀))/((λ-λ₀)² + (Γ/2)²)
+# k = p[1]
+# A = p[2]
+# λ₀ = p[3]
+# Γ = p[4]
+# q = p[5]
+@. fano(λ, p) = p[1] + p[2]*(  (p[4]/2)^2*( 1 - (p[5])^2 )  - p[5]*p[4]*(λ-p[3]) )/( (λ-p[3])^2 + (p[4]/2)^2 )
 
 # This model must have the following meaning:
 # First parameter: Vertical shift
@@ -32,7 +34,7 @@ Plots.GRBackend()
 # If least-squares fitting was really robust against initial guess,
 # we wouldn't need to fit to the denoised data.
 # But we need the initial guesses from the denoised data.
-function fit_denoised_to_model(wavelengths, denoised, model)
+function fit_denoised_to_model(wavelengths, denoised)
     max_idx = argmax(denoised)
     max_reflectance = denoised[max_idx]
     
@@ -44,28 +46,37 @@ function fit_denoised_to_model(wavelengths, denoised, model)
     end
     linewidth_guess = max_wavelength - wavelengths[idx]
 
-    p0 = [0.0, max_reflectance, max_wavelength, linewidth_guess, -1.0]
+    p0 = [0.0, max_reflectance, max_wavelength, linewidth_guess]
 
     idx1 = max(1, max_idx - idx)
     idx2 = min(max_idx + idx, length(wavelengths))
-    fit = curve_fit(model, view(wavelengths, idx1:idx2), view(denoised, idx1:idx2), p0; autodiff=:forwarddiff)
+    fit = curve_fit(lorentzian, view(wavelengths, idx1:idx2), view(denoised, idx1:idx2), p0)
 
-    return fit
+    if !fit.converged
+        println("The Lorentzian fit did not converge. This bad.")
+    end
+
+    p0 = fit.param
+    #println("Fit parameters for Lorentzian: $p0")
+    # Now q = 0:
+    push!(p0, 0.0)
+    fit = curve_fit(fano, view(wavelengths, idx1:idx2), view(denoised, idx1:idx2), p0)
+
+    if !fit.converged
+        println("The Fano fit did not converge.")
+    end
+
+    p0 = fit.param
+    #println("Fit parameters for Fano      : $p0")
+    fit
 end
 
-function fit_denoised_brick_to_model(wavelengths, denoisedBrick, model)
+function fit_denoised_brick_to_model(wavelengths, denoisedBrick)
     dims = size(denoisedBrick)
     fitParamsBrick = Array{Float64,3}(undef, dims[1], dims[2], 5)
     Threads.@threads for j in 1:dims[2]
         for i in 1:dims[1]
-            fit = fit_denoised_to_model(wavelengths, denoisedBrick[i,j,:], model)
-            if !fit.converged
-                println("The Fano fit did not converge for trace $i, $j; fitting to Lorentzian")
-                fit = fit_denoised_to_model(wavelengths, denoisedBrick[i,j,:], lorentzian)
-                if !fit.converged
-                    println("The Lorentzian didn't converge for trace $i, $j either!")
-                end
-            end
+            fit = fit_denoised_to_model(wavelengths, denoisedBrick[i,j,:])
             fitParamsBrick[i,j,:] = fit.param
         end
     end
@@ -130,25 +141,48 @@ function denoise_brick(rawData)
 end
 
 function spot_check_workflow(i,j, wavelengths, denoisedDataset, rawDataset)
-    fit = fit_denoised_to_model(wavelengths, denoisedDataset[i,j,:], lorentzian)
+    println("Spot checking trace $i, $j")
+    fit = fit_denoised_to_model(wavelengths, denoisedDataset[i,j,:])
     if !fit.converged
         println("The Lorentzian fit did not converge on trace $i,$j; this is weird.")
     end
     # Use: fieldnames(typeof(fit)) to explore this fit.
     # This gives, for me, fit.param, fit.resid, fit.jacobian, fit.converged, fit.wt
-    fit_data = lorentzian(wavelengths, fit.param)
+    fit_data = fano(wavelengths, fit.param)
+    q = fit.param[5]
     plt = plot(wavelengths,
                [rawDataset[i,j,:],
                denoisedDataset[i,j,:],
                fit_data],
-               label=["Raw data" "Denoised with 8 Vanishing Moment Symlet" "Lorentzian fit"],
+               label=["Raw data" "Denoised with 8 Vanishing Moment Symlet" "Fano fit (q=$q)"],
                xlabel="λ (nm)",
                ylabel="Reflectance (arbitrary units)",
                size=(1200,800))
     max_idx = argmax(denoisedDataset[i,j,:])
-    plot!([wavelengths[max_idx]], seriestype="vline", label="argmax(denoised)")
+    lambda0 = wavelengths[max_idx]
+    plot!([lambda0], seriestype="vline", label="argmax(denoised) = $lambda0")
     plot!(ylims = (0, maximum(rawDataset[i,j,:])))
     savefig("qc_trace_$i-$j.png")
+end
+
+function q_heatmap(fitBrick)
+    dims = size(fitBrick)
+    qMap = Array{Float64, 2}(undef, (dims[1],dims[2]))
+    for j in 1:dims[2]
+        for i in 1:dims[1]
+            q = fitBrick[i,j,5]
+            # clip:
+            if q < -0.4
+                q = -0.4
+            end
+            if q > 0.4
+                q = 0.4
+            end
+            qMap[i,j] = q
+        end
+    end
+    plt = heatmap(1:dims[1], 1:dims[2], qMap)
+    savefig("q_heatmap.png")
 end
 
 function main()
@@ -167,13 +201,14 @@ function main()
     denoisedDataset = denoise_brick(rawDataset)
 
     dims = size(denoisedDataset)
-    for j in 1:10
-        for i in 1:10
-            spot_check_workflow(i, j, wavelengths, denoisedDataset, rawDataset)
-        end
-    end
+    #for j in 1:4
+    #    for i in 1:4
+    #        spot_check_workflow(i, j, wavelengths, denoisedDataset, rawDataset)
+    #    end
+    #end
 
-    #fitBrick = fit_denoised_brick_to_model(wavelengths, denoisedDataset, model)
+    fitBrick = fit_denoised_brick_to_model(wavelengths, denoisedDataset)
+    q_heatmap(fitBrick)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
