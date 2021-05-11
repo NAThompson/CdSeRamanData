@@ -8,7 +8,7 @@ using Wavelets
 using LsqFit
 using BenchmarkTools
 theme(:solarized)
-PLOTS_DEFAULTS = Dict(:dpi => 600)
+#PLOTS_DEFAULTS = Dict(:dpi => 600)
 Plots.GRBackend()
 
 @. bell_curve(λ, p) = p[1] + p[2]*exp(-((λ-p[3])/p[4])^2)
@@ -20,7 +20,7 @@ Plots.GRBackend()
 # The q parameter is p[5];
 # I suspect there's varying conventions for q; I'm getting q ≈ -1;
 # ostensibly there is more elegance to the expression under the mapping q ↦ 1-q.
-@. fano(λ, p) = p[1] + p[2]*( (p[4]/2)^2*(1-p[5]^2)  - p[5]*(λ-p[3]) )/((λ-p[3])^2 + (p[4]/2)^2)
+@. fano(λ, p) = p[1] + p[2]*(  (p[4]/2)^2*( 1 - (p[5])^2 )  - p[5]*(λ-p[3]) )/((λ-p[3])^2 + (p[4]/2)^2)
 
 # This model must have the following meaning:
 # First parameter: Vertical shift
@@ -56,16 +56,15 @@ end
 function fit_denoised_brick_to_model(wavelengths, denoisedBrick, model)
     dims = size(denoisedBrick)
     fitParamsBrick = Array{Float64,3}(undef, dims[1], dims[2], 5)
-    Threads.@threads for j in dims[2]
-        for i in dims[1]
+    Threads.@threads for j in 1:dims[2]
+        for i in 1:dims[1]
             fit = fit_denoised_to_model(wavelengths, denoisedBrick[i,j,:], model)
             if !fit.converged
                 println("The Fano fit did not converge for trace $i, $j; fitting to Lorentzian")
                 fit = fit_denoised_to_model(wavelengths, denoisedBrick[i,j,:], lorentzian)
                 if !fit.converged
-                    println("The Lorentzian didn't converge either!")
+                    println("The Lorentzian didn't converge for trace $i, $j either!")
                 end
-                println(fit)
             end
             fitParamsBrick[i,j,:] = fit.param
         end
@@ -130,21 +129,19 @@ function denoise_brick(rawData)
     denoisedData
 end
 
-function spot_check_workflow(i,j, wavelengths, denoisedDataset, rawDataset, model)
-    fit = fit_denoised_to_model(wavelengths, denoisedDataset[i,j,:], model)
+function spot_check_workflow(i,j, wavelengths, denoisedDataset, rawDataset)
+    fit = fit_denoised_to_model(wavelengths, denoisedDataset[i,j,:], lorentzian)
     if !fit.converged
-        println("The fit did not converge on trace $i,$j.")
+        println("The Lorentzian fit did not converge on trace $i,$j; this is weird.")
     end
-
     # Use: fieldnames(typeof(fit)) to explore this fit.
     # This gives, for me, fit.param, fit.resid, fit.jacobian, fit.converged, fit.wt
-    fit_data = model(wavelengths, fit.param)
-    q = fit.param[5]
+    fit_data = lorentzian(wavelengths, fit.param)
     plt = plot(wavelengths,
                [rawDataset[i,j,:],
                denoisedDataset[i,j,:],
                fit_data],
-               label=["Raw data" "Denoised with 8 Vanishing Moment Symlet" "Fano Fit (q=$q)"],
+               label=["Raw data" "Denoised with 8 Vanishing Moment Symlet" "Lorentzian fit"],
                xlabel="λ (nm)",
                ylabel="Reflectance (arbitrary units)",
                size=(1200,800))
@@ -153,7 +150,6 @@ function spot_check_workflow(i,j, wavelengths, denoisedDataset, rawDataset, mode
     plot!(ylims = (0, maximum(rawDataset[i,j,:])))
     savefig("qc_trace_$i-$j.png")
 end
-
 
 function main()
     # An example file:
@@ -170,13 +166,14 @@ function main()
     wavelengths, rawDataset = load_dataset(filestring)
     denoisedDataset = denoise_brick(rawDataset)
 
-    model = fano
-    spot_check_workflow(40,79, wavelengths,denoisedDataset, rawDataset, lorentzian)
+    dims = size(denoisedDataset)
+    for j in 1:10
+        for i in 1:10
+            spot_check_workflow(i, j, wavelengths, denoisedDataset, rawDataset)
+        end
+    end
 
-    fitBrick = fit_denoised_brick_to_model(wavelengths, denoisedDataset, model)
-
-    # Use: fieldnames(typeof(fit)) to explore this fit.
-    # This gives, for me, fit.param, fit.resid, fit.jacobian, fit.converged, fit.wt
+    #fitBrick = fit_denoised_brick_to_model(wavelengths, denoisedDataset, model)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
