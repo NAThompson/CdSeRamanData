@@ -215,7 +215,7 @@ function amplitude_heatmap(fitBrick, convergedBrick)
         end
     end
     plt = heatmap(1:dims[1], 1:dims[2], ampMap)
-    savefig("amplitude_heatmap.png")
+    savefig(plt, "amplitude_heatmap.png")
 end
 
 function resonant_heatmap(fitBrick, convergedBrick)
@@ -237,7 +237,7 @@ function resonant_heatmap(fitBrick, convergedBrick)
         end
     end
     plt = heatmap(1:dims[1], 1:dims[2], resMap)
-    savefig("resonant_wavelength_heatmap.png")
+    savefig(plt, "resonant_wavelength_heatmap.png")
 end
 
 function linewidth_heatmap(fitBrick, convergedBrick)
@@ -258,7 +258,7 @@ function linewidth_heatmap(fitBrick, convergedBrick)
         end
     end
     plt = heatmap(1:dims[1], 1:dims[2], linewidthMap)
-    savefig("linewidth_heatmap.png")
+    savefig(plt, "linewidth_heatmap.png")
 end
 
 
@@ -269,7 +269,7 @@ function main()
     # For example, this was taken off oa CdSe/CdTe heterostructure.
     # Probably shot with a 10kV laser at 180 pico amps.
     # 1s - is it an integration type?
-    filestring = "../data/CdSe-CdTe_10kV-180pA-hyper-1s-1B-1G-150nm-150g-200um-VISNIR-80K.h5"
+    filestring = "data/CdSe-CdTe_10kV-180pA-hyper-1s-1B-1G-150nm-150g-200um-VISNIR-80K.h5"
     for arg in ARGS
         filestring = arg
     end
@@ -297,12 +297,12 @@ function main()
 
     fitBrick, convergedBrick = fit_denoised_brick_to_model(wavelengths, denoisedDataset)
     q_heatmap(fitBrick, convergedBrick)
-    amplitude_heatmap(fitBrick, convergedBrick)
-    resonant_heatmap(fitBrick, convergedBrick)
-    linewidth_heatmap(fitBrick, convergedBrick)
+    #amplitude_heatmap(fitBrick, convergedBrick)
+    #resonant_heatmap(fitBrick, convergedBrick)
+    #linewidth_heatmap(fitBrick, convergedBrick)
 
-    plt = heatmap(1:dims[1], 1:dims[2], convergedBrick)
-    savefig("converged.png")
+    #plt = heatmap(1:dims[1], 1:dims[2], convergedBrick)
+    #savefig(plt, "converged.png")
 
 end
 
