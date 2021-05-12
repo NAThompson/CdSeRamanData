@@ -196,7 +196,7 @@ function q_heatmap(fitBrick)
             qMap[i,j] = fitBrick[i,j,4]
         end
     end
-    plt = heatmap(1:dims[1], 1:dims[2], qMap, title="Fano q")
+    plt = heatmap(1:dims[1], 1:dims[2], qMap, title="Fano q", size=(1200,800))
     savefig(plt, "q_heatmap.png")
 end
 
@@ -208,7 +208,7 @@ function amplitude_heatmap(fitBrick)
             ampMap[i,j] = fitBrick[i,j,1]
         end
     end
-    plt = heatmap(1:dims[1], 1:dims[2], ampMap, title="Amplitude Heatmap")
+    plt = heatmap(1:dims[1], 1:dims[2], ampMap, title="Amplitude Heatmap", size=(1200,800))
     savefig(plt, "amplitude_heatmap.png")
 end
 
@@ -220,7 +220,7 @@ function resonant_heatmap(fitBrick)
             resMap[i,j] = fitBrick[i,j,2]
         end
     end
-    plt = heatmap(1:dims[1], 1:dims[2], resMap, title="Resonant wavelength heatmap")
+    plt = heatmap(1:dims[1], 1:dims[2], resMap, title="Resonant wavelength heatmap", size=(1200,800))
     savefig(plt, "resonant_wavelength_heatmap.png")
 end
 
@@ -232,7 +232,7 @@ function linewidth_heatmap(fitBrick)
             linewidthMap[i,j] = fitBrick[i,j,3]
         end
     end
-    plt = heatmap(1:dims[1], 1:dims[2], linewidthMap, title="Linewidth heatmap")
+    plt = heatmap(1:dims[1], 1:dims[2], linewidthMap, title="Linewidth heatmap", size=(1200,800))
     savefig(plt, "linewidth_heatmap.png")
 end
 
