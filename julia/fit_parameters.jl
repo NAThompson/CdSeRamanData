@@ -13,57 +13,61 @@ Plots.GRBackend()
 
 @. bell_curve(λ, p) = p[1] + p[2]*exp(-((λ-p[3])/p[4])^2)
 
-# L(λ) = k + A(Γ/2)²/((λ-λ₀)² + (Γ/2)²)
-@. lorentzian(λ, p) = p[1] + p[2]*(p[4]/2)^2/((λ-p[3])^2 + (p[4]/2)^2)
+# L(λ) = A(Γ/2)²/((λ-λ₀)² + (Γ/2)²)
+@. lorentzian(λ, p) = p[1]*(p[3]/2)^2/((λ-p[2])^2 + (p[3]/2)^2)
 
-# f(λ) = k + A((Γ/2)²(1-q²) - qΓ(λ-λ₀))/((λ-λ₀)² + (Γ/2)²)
-# k = p[1]
-# A = p[2]
-# λ₀ = p[3]
-# Γ = p[4]
-# q = p[5]
-@. fano(λ, p) = p[1] + p[2]*(  (p[4]/2)^2*( 1 - (p[5])^2 )  - p[5]*p[4]*(λ-p[3]) )/( (λ-p[3])^2 + (p[4]/2)^2 )
+# f(λ) = A((Γ/2)²(1-q²) - qΓ(λ-λ₀))/((λ-λ₀)² + (Γ/2)²)
+# A = p[1]
+# λ₀ = p[2]
+# Γ = p[3]
+# q = p[4]
+@. fano(λ, p) = p[1]*(  (p[3]/2)^2*( 1 - (p[4])^2 )  - p[4]*p[3]*(λ-p[2]) )/( (λ-p[2])^2 + (p[3]/2)^2 )
 
-# This model must have the following meaning:
-# First parameter: Vertical shift
-# Second parameter: Amplitude
-# Third parameter: Horizontal shift
-# Fourth parameter: Linewidth
 # If it doesn't, the initial guesses will be completely wrong.
 # Of course, it might converge anyway though!
 # If least-squares fitting was really robust against initial guess,
 # we wouldn't need to fit to the denoised data.
 # But we need the initial guesses from the denoised data.
-function fit_denoised_to_model(wavelengths, denoised)
+function fit_denoised_to_model(wavelengths, denoised, peak_fraction=3)
     max_idx = argmax(denoised)
     max_reflectance = denoised[max_idx]
     
     max_wavelength = wavelengths[max_idx]
     max_reflectance = denoised[max_idx]
     idx = 0
-    while denoised[max_idx + idx] > max_reflectance/2
+    while denoised[max_idx + idx] > max_reflectance/peak_fraction
         idx += 1
     end
     linewidth_guess = max_wavelength - wavelengths[idx]
 
-    p0 = [0.0, max_reflectance, max_wavelength, linewidth_guess]
+    p0 = [max_reflectance, max_wavelength, linewidth_guess]
 
     idx1 = max(1, max_idx - idx)
     idx2 = min(max_idx + idx, length(wavelengths))
     fit = curve_fit(lorentzian, view(wavelengths, idx1:idx2), view(denoised, idx1:idx2), p0)
 
-    if !fit.converged
-        println("The Lorentzian fit did not converge. This bad.")
+    if fit.converged
+        p0 = fit.param
     end
 
-    p0 = fit.param
+
     #println("Fit parameters for Lorentzian: $p0")
     # Now q = 0:
     push!(p0, 0.0)
     fit = curve_fit(fano, view(wavelengths, idx1:idx2), view(denoised, idx1:idx2), p0)
 
     if !fit.converged
-        println("The Fano fit did not converge.")
+        if peak_fraction == 3
+            #println("Trying peak_fraction = 4")
+            return fit_denoised_to_model(wavelengths, denoised, 4)
+        elseif peak_fraction == 4
+            #println("Trying peak_fraction = 2")
+            return fit_denoised_to_model(wavelengths, denoised, 2)
+        elseif peak_fraction == 2
+            #println("Trying peak_fraction = 5")
+            fit = fit_denoised_to_model(wavelengths, denoised, 5)
+            return fit
+        end
     end
 
     p0 = fit.param
@@ -73,14 +77,19 @@ end
 
 function fit_denoised_brick_to_model(wavelengths, denoisedBrick)
     dims = size(denoisedBrick)
-    fitParamsBrick = Array{Float64,3}(undef, dims[1], dims[2], 5)
-    Threads.@threads for j in 1:dims[2]
+    fitParamsBrick = Array{Float64,3}(undef, dims[1], dims[2], 4)
+    convergedBrick = Array{Bool,2}(undef, dims[1], dims[2])
+    for j in 1:dims[2]
         for i in 1:dims[1]
-            fit = fit_denoised_to_model(wavelengths, denoisedBrick[i,j,:])
+            fit = fit_denoised_to_model(wavelengths, denoisedBrick[i,j,:], 3)
             fitParamsBrick[i,j,:] = fit.param
+            if !fit.converged
+                println("The fit did not converge on trace $i, $j")
+            end
+            convergedBrick[i,j] = fit.converged
         end
     end
-    fitParamsBrick
+    fitParamsBrick, convergedBrick
 end
 
 function load_dataset(filestring)
@@ -122,7 +131,7 @@ end
 function denoise_brick(rawData)
     dims = size(rawData)
     denoisedData = Array{Float64, 3}(undef, (dims[1],dims[2],dims[3]))
-    Threads.@threads for j in 1:dims[2]
+    for j in 1:dims[2]
         for i in 1:dims[1]
             # Translation invariance puts a little ring right on the peak (for the examples I tried!)
             # Hence the TI=false. I also tried the 6 and 10 vanishing moment symlet, which were both inferior
@@ -149,7 +158,7 @@ function spot_check_workflow(i,j, wavelengths, denoisedDataset, rawDataset)
     # Use: fieldnames(typeof(fit)) to explore this fit.
     # This gives, for me, fit.param, fit.resid, fit.jacobian, fit.converged, fit.wt
     fit_data = fano(wavelengths, fit.param)
-    q = fit.param[5]
+    q = fit.param[4]
     plt = plot(wavelengths,
                [rawDataset[i,j,:],
                denoisedDataset[i,j,:],
@@ -165,25 +174,93 @@ function spot_check_workflow(i,j, wavelengths, denoisedDataset, rawDataset)
     savefig("qc_trace_$i-$j.png")
 end
 
-function q_heatmap(fitBrick)
+function q_heatmap(fitBrick, convergedBrick)
     dims = size(fitBrick)
     qMap = Array{Float64, 2}(undef, (dims[1],dims[2]))
     for j in 1:dims[2]
         for i in 1:dims[1]
-            q = fitBrick[i,j,5]
+            q = fitBrick[i,j,4]
             # clip:
-            if q < -0.4
-                q = -0.4
+            if q < -0.6
+                q = -0.6
             end
-            if q > 0.4
-                q = 0.4
+            if q > 0.6
+                q = 0.6
             end
             qMap[i,j] = q
+            # The model is invariant under simultaneous reflections of Γ and q,
+            # so if Γ < 0, then q has the wrong sign.
+            if fitBrick[i,j,3] < 0
+                qMap[i,j] = -q
+            end
+            if !convergedBrick[i,j]
+                qMap[i,j] = 0
+            end
         end
     end
     plt = heatmap(1:dims[1], 1:dims[2], qMap)
     savefig("q_heatmap.png")
 end
+
+function amplitude_heatmap(fitBrick, convergedBrick)
+    dims = size(fitBrick)
+    ampMap = Array{Float64, 2}(undef, (dims[1],dims[2]))
+    for j in 1:dims[2]
+        for i in 1:dims[1]
+            A = fitBrick[i,j,1]
+            ampMap[i,j] = A
+            if !convergedBrick[i,j]
+                ampMap[i,j] = 0
+            end
+        end
+    end
+    plt = heatmap(1:dims[1], 1:dims[2], ampMap)
+    savefig("amplitude_heatmap.png")
+end
+
+function resonant_heatmap(fitBrick, convergedBrick)
+    dims = size(fitBrick)
+    resMap = Array{Float64, 2}(undef, (dims[1],dims[2]))
+    for j in 1:dims[2]
+        for i in 1:dims[1]
+            resMap[i,j] = fitBrick[i,j,2]
+            if !convergedBrick[i,j]
+                # This is a weird thing to do, but . . .
+                resMap[i,j] = 500
+            end
+            if resMap[i,j] > 1000
+                resMap[i,j] = 500
+            end
+            if resMap[i,j] < 0
+                resMap[i,j] = 500
+            end
+        end
+    end
+    plt = heatmap(1:dims[1], 1:dims[2], resMap)
+    savefig("resonant_wavelength_heatmap.png")
+end
+
+function linewidth_heatmap(fitBrick, convergedBrick)
+    dims = size(fitBrick)
+    linewidthMap = Array{Float64, 2}(undef, (dims[1],dims[2]))
+    for j in 1:dims[2]
+        for i in 1:dims[1]
+            linewidthMap[i,j] = fitBrick[i,j,3]
+            if linewidthMap[i,j] < 0
+                linewidthMap[i,j] = -linewidthMap[i,j]
+            end
+            if linewidthMap[i,j] > 300
+                linewidthMap[i,j] = 0
+            end
+            if !convergedBrick[i,j]
+                linewidthMap[i,j] = 0
+            end
+        end
+    end
+    plt = heatmap(1:dims[1], 1:dims[2], linewidthMap)
+    savefig("linewidth_heatmap.png")
+end
+
 
 function main()
     # An example file:
@@ -201,14 +278,32 @@ function main()
     denoisedDataset = denoise_brick(rawDataset)
 
     dims = size(denoisedDataset)
-    #for j in 1:4
-    #    for i in 1:4
-    #        spot_check_workflow(i, j, wavelengths, denoisedDataset, rawDataset)
-    #    end
-    #end
+    #=for j in 1:4
+        for i in 1:4
+            spot_check_workflow(i, j, wavelengths, denoisedDataset, rawDataset)
+        end
+    end
+    spot_check_workflow(19, 52, wavelengths, denoisedDataset, rawDataset)
+    spot_check_workflow(9, 42, wavelengths, denoisedDataset, rawDataset)
+    spot_check_workflow(36, 20, wavelengths, denoisedDataset, rawDataset)
+    spot_check_workflow(36, 21, wavelengths, denoisedDataset, rawDataset)
+    spot_check_workflow(8, 42, wavelengths, denoisedDataset, rawDataset)
+    spot_check_workflow(9, 41, wavelengths, denoisedDataset, rawDataset)
+    spot_check_workflow(8, 41, wavelengths, denoisedDataset, rawDataset)
+    spot_check_workflow(6, 41, wavelengths, denoisedDataset, rawDataset)
+    spot_check_workflow(18, 40, wavelengths, denoisedDataset, rawDataset)
+    spot_check_workflow(8, 38, wavelengths, denoisedDataset, rawDataset)
+    spot_check_workflow(10, 22, wavelengths, denoisedDataset, rawDataset)=#
 
-    fitBrick = fit_denoised_brick_to_model(wavelengths, denoisedDataset)
-    q_heatmap(fitBrick)
+    fitBrick, convergedBrick = fit_denoised_brick_to_model(wavelengths, denoisedDataset)
+    q_heatmap(fitBrick, convergedBrick)
+    amplitude_heatmap(fitBrick, convergedBrick)
+    resonant_heatmap(fitBrick, convergedBrick)
+    linewidth_heatmap(fitBrick, convergedBrick)
+
+    plt = heatmap(1:dims[1], 1:dims[2], convergedBrick)
+    savefig("converged.png")
+
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
