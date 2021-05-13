@@ -11,8 +11,6 @@ theme(:solarized)
 #PLOTS_DEFAULTS = Dict(:dpi => 600)
 Plots.GRBackend()
 
-@. bell_curve(λ, p) = p[1] + p[2]*exp(-((λ-p[3])/p[4])^2)
-
 # L(λ) = A(Γ/2)²/((λ-λ₀)² + (Γ/2)²)
 @. lorentzian(λ, p) = p[1]*(p[3]/2)^2/((λ-p[2])^2 + (p[3]/2)^2)
 
@@ -196,7 +194,8 @@ function q_heatmap(fitBrick)
             qMap[i,j] = fitBrick[i,j,4]
         end
     end
-    plt = heatmap(1:dims[1], 1:dims[2], qMap, title="Fano q", size=(1200,800))
+    # BUG: Needed to swamp dimensions here!
+    plt = heatmap(1:dims[2], 1:dims[1], qMap, title="Fano q", size=(1200,800), fc = :viridis)
     savefig(plt, "q_heatmap.png")
 end
 
@@ -208,7 +207,8 @@ function amplitude_heatmap(fitBrick)
             ampMap[i,j] = fitBrick[i,j,1]
         end
     end
-    plt = heatmap(1:dims[1], 1:dims[2], ampMap, title="Amplitude Heatmap", size=(1200,800))
+    # BUG: Needed to swamp dimensions here!
+    plt = heatmap(1:dims[2], 1:dims[1], ampMap, title="Amplitude Heatmap", size=(1200,800), fc = :viridis)
     savefig(plt, "amplitude_heatmap.png")
 end
 
@@ -220,7 +220,8 @@ function resonant_heatmap(fitBrick)
             resMap[i,j] = fitBrick[i,j,2]
         end
     end
-    plt = heatmap(1:dims[1], 1:dims[2], resMap, title="Resonant wavelength heatmap", size=(1200,800))
+    # BUG: Needed to swamp dimensions here!
+    plt = heatmap(1:dims[2], 1:dims[1], resMap, title="Resonant wavelength heatmap", size=(1200,800), fc = :viridis)
     savefig(plt, "resonant_wavelength_heatmap.png")
 end
 
@@ -232,7 +233,8 @@ function linewidth_heatmap(fitBrick)
             linewidthMap[i,j] = fitBrick[i,j,3]
         end
     end
-    plt = heatmap(1:dims[1], 1:dims[2], linewidthMap, title="Linewidth heatmap", size=(1200,800))
+    # BUG: Needed to swamp dimensions here!
+    plt = heatmap(1:dims[2], 1:dims[1], linewidthMap, title="Linewidth heatmap", size=(1200,800), fc = :viridis)
     savefig(plt, "linewidth_heatmap.png")
 end
 
@@ -253,7 +255,7 @@ function main()
     denoisedDataset = denoise_brick(rawDataset)
 
     dims = size(denoisedDataset)
-    for j in 1:4
+    #=for j in 1:4
         for i in 1:4
             spot_check_workflow(i, j, wavelengths, denoisedDataset, rawDataset)
         end
@@ -268,7 +270,7 @@ function main()
     spot_check_workflow(6, 41, wavelengths, denoisedDataset, rawDataset)
     spot_check_workflow(18, 40, wavelengths, denoisedDataset, rawDataset)
     spot_check_workflow(8, 38, wavelengths, denoisedDataset, rawDataset)
-    spot_check_workflow(10, 22, wavelengths, denoisedDataset, rawDataset)
+    spot_check_workflow(10, 22, wavelengths, denoisedDataset, rawDataset)=#
 
     fitBrick, convergedBrick = fit_denoised_brick_to_model(wavelengths, denoisedDataset)
     q_heatmap(fitBrick)
